@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Pitch Shifter — Upload MP3</title>
+    <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; max-width:900px; margin:40px auto; padding:0 18px; color:#222; }
+    h1 { margin-bottom:6px; }
+    label { display:block; margin-top:14px; font-weight:600; }
+    input[type="file"] { margin-top:6px; }
+    .row { display:flex; gap:12px; align-items:center; margin-top:8px; }
+    .btn { padding:10px 14px; border-radius:8px; border:1px solid #2b6cb0; background:#2b6cb0; color:white; cursor:pointer; }
+    .btn:disabled { opacity:.6; cursor:default; }
+    .progress { margin-top:10px; height:8px; background:#eee; border-radius:8px; overflow:hidden; width:100%; }
+    .progress > i { display:block; height:100%; width:0%; background:#2b6cb0; transition:width .2s; }
+    .info { margin-top:10px; color:#444; }
+    .output { margin-top:18px; border-top:1px solid #eee; padding-top:14px; }
+    audio { width:100%; margin-top:8px; }
+    small { color:#666; }
+  </style>
+</head>
+<body>
+<h1>Pitch Shifter</h1>
+<p class="info">Upload an MP3, pick how many semitones to shift (±12), and the server will return the pitch-shifted audio without changing playback speed.</p>
+
+<form id="form">
+    <label for="file">Select MP3</label>
+    <input id="file" name="file" type="file" accept="audio/mpeg,audio/mp3" required />
+
+    <label for="semitones">Semitones (±12)</label>
+    <div class="row">
+        <input id="semitones" name="semitones" type="range" min="-12" max="12" value="0" step="1" style="flex:1" />
+        <div style="min-width:72px; text-align:center;">
+            <input id="semitones-number" type="number" min="-12" max="12" value="0" step="1" style="width:72px" />
+        </div>
+    </div>
+    <small>Semitones change pitch musically. +12 = one octave up, -12 = one octave down.</small>
+
+    <label style="margin-top:12px;">Output format</label>
+    <div class="row">
+        <select id="format" name="format">
+            <option value="wav">WAV (recommended)</option>
+            <option value="mp3">MP3 (server must support encoding)</option>
+        </select>
+        <button id="submitBtn" class="btn" type="submit">Upload & Shift Pitch</button>
+    </div>
+
+    <div class="progress" aria-hidden="true" style="display:none; margin-top:12px;">
+        <i id="progressBar"></i>
+    </div>
+</form>
+
+<div class="output" id="output" style="display:none;">
+    <h3>Result</h3>
+    <p id="resultFilename"></p>
+    <audio id="player" controls></audio>
+    <div style="margin-top:8px;">
+        <a id="downloadLink" class="btn" download>Download processed file</a>
+        <button id="clearBtn" style="margin-left:8px;" class="btn">Clear</button>
+    </div>
+</div>
+
+<script>
+    // Utility: convert semitone shift to pitch factor used by server (factor = 2^(semitones/12))
+    function semitonesToFactor(semitones) {
+      return Math.pow(2, semitones / 12);
+    }
+
+    const semRange = document.getElementById('semitones');
+    const semNum = document.getElementById('semitones-number');
+    semRange.addEventListener('input', () => semNum.value = semRange.value);
+    semNum.addEventListener('input', () => {
+      let v = Number(semNum.value);
+      if (isNaN(v)) v = 0;
+      if (v < -12) v = -12;
+      if (v > 12) v = 12;
+      semNum.value = v;
+      semRange.value = v;
+    });
+
+    const form = document.getElementById('form');
+    const submitBtn = document.getElementById('submitBtn');
+    const progressBar = document.getElementById('progressBar');
+    const progressWrap = document.querySelector('.progress');
+    const output = document.getElementById('output');
+    const player = document.getElementById('player');
+    const downloadLink = document.getElementById('downloadLink');
+    const resultFilename = document.getElementById('resultFilename');
+    const clearBtn = document.getElementById('clearBtn');
+
+    // NOTE: adjust endpoint if your Spring Boot mapping is different.
+    // Current example: POST /api/audio/pitch (expects 'file' and 'shift' params)
+    const ENDPOINT = '/api/audio/pitch';
+
+    function setUploading(isUploading) {
+      submitBtn.disabled = isUploading;
+      progressWrap.style.display = isUploading ? 'block' : 'none';
+      progressBar.style.width = isUploading ? '2%' : '0%';
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fileInput = document.getElementById('file');
+      if (!fileInput.files || !fileInput.files.length) {
+        alert('Please select an MP3 file first.');
+        return;
+      }
+
+      const file = fileInput.files[0];
+      const semitones = Number(semRange.value || '0');
+      const format = document.getElementById('format').value;
+
+      // compute factor for the server API
+      const shiftFactor = semitonesToFactor(semitones);
+
+      const fd = new FormData();
+      fd.append('file', file, file.name);
+      // server expects parameter name "shift" (per your controller). Adjust if different.
+      fd.append('shift', shiftFactor);
+      fd.append('format', format); // optional: server may ignore if not supported
+
+      try {
+        setUploading(true);
+
+        // Use fetch with progress via XHR (fetch currently has no upload progress callback in many browsers)
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', ENDPOINT, true);
+        xhr.responseType = 'blob';
+
+        xhr.upload.onprogress = (ev) => {
+          if (ev.lengthComputable) {
+            const pct = Math.round((ev.loaded / ev.total) * 100);
+            progressBar.style.width = pct + '%';
+          } else {
+            progressBar.style.width = '50%';
+          }
+        };
+
+        xhr.onload = () => {
+          setUploading(false);
+          if (xhr.status >= 200 && xhr.status < 300) {
+            const blob = xhr.response;
+            const cd = xhr.getResponseHeader('Content-Disposition') || '';
+            let filename = 'shifted_audio';
+            // try to extract filename from header
+            const match = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(cd);
+            if (match && match[1]) {
+              filename = match[1].replace(/['"]/g, '');
+            } else {
+              // fallback choose extension by mime type
+              const type = blob.type || '';
+              if (type.includes('mpeg')) filename += '.mp3';
+              else if (type.includes('wav') || format === 'wav') filename += '.wav';
+              else filename += '.bin';
+            }
+
+            // create object URL and attach to player and download link
+            const url = URL.createObjectURL(blob);
+            player.src = url;
+            player.load();
+            downloadLink.href = url;
+            downloadLink.download = filename;
+            resultFilename.textContent = 'Processed file: ' + filename;
+            output.style.display = 'block';
+          } else {
+            // try to parse error message
+            let errText = 'Server returned status ' + xhr.status;
+            try {
+              const txt = xhr.response && new TextDecoder().decode(xhr.response);
+              if (txt) errText += ': ' + txt;
+            } catch (err) { /* ignore */ }
+            alert('Upload failed — ' + errText);
+          }
+        };
+
+        xhr.onerror = () => {
+          setUploading(false);
+          alert('Network error while uploading.');
+        };
+
+        xhr.send(fd);
+      } catch (err) {
+        setUploading(false);
+        alert('Unexpected error: ' + err.message);
+      }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      // revoke object URL and clear UI
+      if (player.src) URL.revokeObjectURL(player.src);
+      player.pause();
+      player.src = '';
+      downloadLink.href = '#';
+      output.style.display = 'none';
+      document.getElementById('file').value = '';
+      semRange.value = 0;
+      semNum.value = 0;
+    });
+  </script>
+</body>
+</html>
