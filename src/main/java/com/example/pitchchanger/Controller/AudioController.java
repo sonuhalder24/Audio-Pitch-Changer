@@ -32,10 +32,10 @@ public class AudioController {
     @PostMapping("/pitch")
     public ResponseEntity<byte[]> autoPitchChange(
             @RequestParam("file") MultipartFile file,
-            @RequestParam("targetNote") String targetNote,
-            @RequestParam(value = "keepTempo", defaultValue = "true") boolean keepTempo
+            @RequestParam(value="targetNote",defaultValue = "") String targetNote,
+            @RequestParam(value="shift",defaultValue = "0") int Pshift
     ) throws Exception {
-
+        boolean keepTempo=true;
         String originalFilename = file.getOriginalFilename();
         System.out.println("=== PROCESSING FILE: " + originalFilename + " ===");
 
@@ -67,10 +67,13 @@ public class AudioController {
             }
 
             // Step 4: Calculate pitch shift in semitones
-            int sourceMidi = hzToMidi(detectedPitch);
-            int targetMidi = noteToMidi(targetNote);
-            int semitoneSteps = targetMidi - sourceMidi;
-
+            int semitoneSteps=Pshift;
+            System.out.println("targetNote:" + targetNote);
+            if(!targetNote.equals("")) {
+                int sourceMidi = hzToMidi(detectedPitch);
+                int targetMidi = noteToMidi(targetNote);
+                semitoneSteps = targetMidi - sourceMidi;
+            }
             if (Math.abs(semitoneSteps) > 24) {
                 throw new IllegalArgumentException("Pitch shift too extreme: " + semitoneSteps + " semitones");
             }
